@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import mimetypes
 import os
 import socket
 import time
@@ -120,9 +121,11 @@ def run_download(job_id: str) -> None:
                 job.progress = min(99, int(downloaded * 100 / total))
 
     requested = job.format_id
+    # Some hosts expose only a combined stream, so every quality must have a
+    # combined-stream fallback instead of failing at the end of the job.
     format_selector = requested or (
-        "bestvideo+bestaudio/best" if job.quality == "best"
-        else f"bestvideo[height<={job.quality}]+bestaudio/best[height<={job.quality}]"
+        "bv*+ba/b" if job.quality == "best"
+        else f"bv*[height<={job.quality}]+ba/b[height<={job.quality}]/b"
     )
     options = {
         "format": format_selector,
@@ -220,7 +223,16 @@ async def get_file(job_id: str):
     file = DATA_DIR / job_id / job.filename
     if not file.is_file():
         raise HTTPException(404, "This file is no longer available.")
-    return FileResponse(file, filename=job.filename, media_type="application/octet-stream")
+    media_type, _ = mimetypes.guess_type(file.name)
+    return FileResponse(
+        file,
+        filename=job.filename,
+        media_type=media_type or "application/octet-stream",
+        headers={
+            "Cache-Control": "private, no-store, max-age=0",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 app.mount("/", StaticFiles(directory="app/static", html=True), name="site")

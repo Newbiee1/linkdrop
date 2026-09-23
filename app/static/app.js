@@ -3,6 +3,7 @@ const count = document.querySelector('#count');
 const choices = document.querySelector('#choices');
 const queue = document.querySelector('#queue');
 let analyzed = [];
+let queuePoll;
 
 function urls() { return [...new Set(links.value.split(/\n|,|\s+/).map(x => x.trim()).filter(Boolean))]; }
 function updateCount() { count.textContent = `${urls().length} of 8 links`; }
@@ -40,10 +41,14 @@ function label(job) { return job.title || new URL(job.source_url).hostname; }
 async function loadQueue() {
   try {
     const data = await api('/api/jobs');
+    window.clearTimeout(queuePoll);
     if (!data.jobs.length) { queue.className = 'queue empty'; queue.textContent = 'Nothing in the queue yet.'; return; }
     queue.className = 'queue';
-    queue.innerHTML = data.jobs.map(job => `<article class="job"><div class="job-head"><span class="job-title">${escapeHtml(label(job))}</span><span class="pill ${job.state}">${job.state}</span></div>${job.state === 'downloading' ? `<div class="bar"><i style="width:${job.progress}%"></i></div>` : ''}${job.state === 'complete' ? `<a class="download" href="/api/files/${job.id}">Download file ↓</a>` : ''}${job.state === 'failed' ? `<small>${escapeHtml(job.error || 'Download failed')}</small>` : ''}</article>`).join('');
+    queue.innerHTML = data.jobs.map(job => `<article class="job"><div class="job-head"><span class="job-title">${escapeHtml(label(job))}</span><span class="pill ${job.state}">${job.state}</span></div>${job.state === 'downloading' ? `<div class="bar"><i style="width:${job.progress}%"></i></div>` : ''}${job.state === 'complete' ? `<a class="download" href="/api/files/${job.id}" download>Save to device ↓</a><small class="save-help">On iPhone, tap this once, then open Safari’s Downloads (↓) and choose Save to Files.</small>` : ''}${job.state === 'failed' ? `<small>${escapeHtml(job.error || 'Download failed')}</small>` : ''}</article>`).join('');
+    if (data.jobs.some(job => job.state === 'queued' || job.state === 'downloading')) {
+      queuePoll = window.setTimeout(loadQueue, 2_000);
+    }
   } catch (_) { /* Queue will refresh next time. */ }
 }
 document.querySelector('#refresh').addEventListener('click', loadQueue);
-setInterval(loadQueue, 5000); loadQueue();
+loadQueue();
