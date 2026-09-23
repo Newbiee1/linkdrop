@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0b1120" />
+    <title>LinkDrop — save your permitted videos</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='17' fill='%235eead4'/%3E%3Cpath d='M32 12v27m0 0-11-11m11 11 11-11M17 43v8h30v-8' fill='none' stroke='%230b1120' stroke-width='6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="/styles.css" />
+    <script defer src="/app.js"></script>
+  </head>
+  <body>
+    <main>
+      <header>
+        <a class="brand" href="/" aria-label="LinkDrop home"><span>↓</span> LinkDrop</a>
+        <p>Private, simple downloads</p>
+      </header>
+      <section class="hero">
+        <div class="eyebrow">YOUR LINKS · YOUR FILES</div>
+        <h1>Save videos for <em>offline.</em></h1>
+        <p class="intro">Paste one link or a small batch. Pick the version that works best on your phone — including compact 480p options.</p>
+        <div class="composer">
+          <label for="links">Video link</label>
+          <textarea id="links" rows="3" placeholder="https://example.com/video&#10;Paste one link per line for a batch"></textarea>
+          <div class="composer-footer">
+            <span id="count">0 of 8 links</span>
+            <button id="analyze" type="button">Find versions <b>→</b></button>
+          </div>
+        </div>
+        <p class="notice">Only download media you own or are authorized to save. This service does not bypass DRM or access controls.</p>
+      </section>
+      <section id="choices" class="panel hidden" aria-live="polite"></section>
+      <section class="queue-section">
+        <div class="section-title"><div><span class="eyebrow">ACTIVITY</span><h2>Your download queue</h2></div><button class="text-button" id="refresh" type="button">Refresh</button></div>
+        <div id="queue" class="queue empty">Nothing in the queue yet.</div>
+      </section>
+    </main>
+    <footer>LinkDrop runs on your own server. Files are deleted automatically after 24 hours.</footer>
+  </body>
+</html>
