@@ -16,7 +16,7 @@ from typing import Literal
 from urllib.parse import urlparse
 
 import yt_dlp
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -24,7 +24,8 @@ from pydantic import BaseModel, Field
 DATA_DIR = Path(os.getenv("DOWNLOAD_DIR", "/data/downloads")).resolve()
 MAX_BATCH = int(os.getenv("MAX_BATCH", "8"))
 MAX_CONCURRENT = int(os.getenv("MAX_CONCURRENT_DOWNLOADS", "2"))
-DOWNLOAD_TTL_SECONDS = int(os.getenv("DOWNLOAD_TTL_SECONDS", "86400"))
+DOWNLOAD_TTL_SECONDS = int(os.getenv("DOWNLOAD_TTL_SECONDS", "300"))
+CLEANUP_INTERVAL_SECONDS = min(60, max(5, DOWNLOAD_TTL_SECONDS // 10))
 MAX_DOWNLOADS_PER_HOUR = int(os.getenv("MAX_DOWNLOADS_PER_HOUR", "5"))
 RATE_LIMIT_WINDOW_SECONDS = 3_600
 
@@ -48,7 +49,7 @@ class QueueRequest(BaseModel):
 class Job(BaseModel):
     id: str
     source_url: str
-    state: Literal["queued", "downloading", "complete", "served", "failed"] = "queued"
+    state: Literal["queued", "downloading", "complete", "failed"] = "queued"
     quality: str = "best"
     format_id: str | None = Field(default=None, exclude=True)
     progress: int = 0
@@ -57,6 +58,7 @@ class Job(BaseModel):
     error: str | None = None
     created_at: float = Field(default_factory=time.time)
     completed_at: float | None = None
+    expires_at: float | None = None
 
 
 jobs: dict[str, Job] = {}
@@ -152,6 +154,8 @@ def run_download(job_id: str) -> None:
             downloaded = event.get("downloaded_bytes", 0)
             if total:
                 job.progress = min(99, int(downloaded * 100 / total))
+        elif event.get("status") == "finished":
+            job.progress = 99
 
     requested = job.format_id
     # Some hosts expose only a combined stream, so every quality must have a
@@ -182,6 +186,7 @@ def run_download(job_id: str) -> None:
         job.progress = 100
         job.state = "complete"
         job.completed_at = time.time()
+        job.expires_at = job.completed_at + DOWNLOAD_TTL_SECONDS
     except Exception as exc:  # yt-dlp errors are made safe for the UI here.
         job.state = "failed"
         job.error = str(exc)[:300]
@@ -198,7 +203,7 @@ async def download_worker() -> None:
 
 async def remove_expired_jobs() -> None:
     while True:
-        await asyncio.sleep(3_600)
+        await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
         cutoff = time.time() - DOWNLOAD_TTL_SECONDS
         for job_id, job in list(jobs.items()):
             if job.completed_at and job.completed_at < cutoff:
@@ -261,17 +266,8 @@ async def list_jobs():
     return {"jobs": sorted(jobs.values(), key=lambda job: job.created_at, reverse=True)}
 
 
-def remove_served_file(job_id: str, file: Path) -> None:
-    """Remove a one-time file after its response finishes streaming."""
-    file.unlink(missing_ok=True)
-    job = jobs.get(job_id)
-    if job:
-        job.filename = None
-        job.state = "served"
-
-
 @app.get("/api/files/{job_id}")
-async def get_file(job_id: str, background_tasks: BackgroundTasks):
+async def get_file(job_id: str):
     job = jobs.get(job_id)
     if not job or job.state != "complete" or not job.filename:
         raise HTTPException(404, "This file is not available.")
@@ -279,7 +275,6 @@ async def get_file(job_id: str, background_tasks: BackgroundTasks):
     if not file.is_file():
         raise HTTPException(404, "This file is no longer available.")
     media_type, _ = mimetypes.guess_type(file.name)
-    background_tasks.add_task(remove_served_file, job_id, file)
     return FileResponse(
         file,
         filename=job.filename,
@@ -288,7 +283,6 @@ async def get_file(job_id: str, background_tasks: BackgroundTasks):
             "Cache-Control": "private, no-store, max-age=0",
             "X-Content-Type-Options": "nosniff",
         },
-        background=background_tasks,
     )
 
 

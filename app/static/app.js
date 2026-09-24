@@ -56,15 +56,24 @@ choices.addEventListener('click', async event => {
 
 function escapeHtml(value = '') { const div = document.createElement('div'); div.textContent = value; return div.innerHTML; }
 function label(job) { return job.title || new URL(job.source_url).hostname; }
+function minutesRemaining(job) {
+  if (!job.expires_at) return 'a few minutes';
+  return `${Math.max(1, Math.ceil((job.expires_at - Date.now() / 1000) / 60))} min`;
+}
 async function loadQueue() {
   try {
     const data = await api('/api/jobs');
     window.clearTimeout(queuePoll);
     if (!data.jobs.length) { queue.className = 'queue empty'; queue.textContent = 'Nothing in the queue yet.'; return; }
     queue.className = 'queue';
-    queue.innerHTML = data.jobs.map(job => `<article class="job"><div class="job-head"><span class="job-title">${escapeHtml(label(job))}</span><span class="pill ${job.state}">${job.state}</span></div>${job.state === 'downloading' ? `<div class="bar"><i style="width:${job.progress}%"></i></div>` : ''}${job.state === 'complete' ? `<a class="download" href="/api/files/${job.id}" download>Save to device ↓</a><small class="save-help">On iPhone, tap this once, then open Safari’s Downloads (↓) and choose Save to Files.</small>` : ''}${job.state === 'served' ? '<small class="save-help">File delivered and removed from the server.</small>' : ''}${job.state === 'failed' ? `<small>${escapeHtml(job.error || 'Download failed')}</small>` : ''}</article>`).join('');
-    if (data.jobs.some(job => job.state === 'queued' || job.state === 'downloading')) {
+    queue.innerHTML = data.jobs.map(job => `<article class="job"><div class="job-head"><span class="job-title">${escapeHtml(label(job))}</span><span class="pill ${job.state}">${job.state === 'downloading' ? `downloading ${job.progress}%` : job.state}</span></div>${job.state === 'downloading' ? `<div class="bar"><i style="width:${job.progress}%"></i></div><small class="progress-text">Server download: ${job.progress}%</small>` : ''}${job.state === 'complete' ? `<div class="ready-download"><span>↓ Tap here to save your video</span><a class="download" href="/api/files/${job.id}" download>Download to device ↓</a></div><small class="save-help">Ready now — available for about ${minutesRemaining(job)}. On iPhone, tap the button once, then open Safari’s Downloads (↓) and choose Save to Files.</small>` : ''}${job.state === 'failed' ? `<small>${escapeHtml(job.error || 'Download failed')}</small>` : ''}</article>`).join('');
+    const waiting = data.jobs.some(job => job.state === 'queued' || job.state === 'downloading');
+    const expiry = Math.min(...data.jobs.filter(job => job.state === 'complete' && job.expires_at).map(job => job.expires_at));
+    if (waiting) {
       queuePoll = window.setTimeout(loadQueue, 2_000);
+    } else if (Number.isFinite(expiry)) {
+      const nextCheck = Math.max(1_000, Math.min(30_000, (expiry - Date.now() / 1000) * 1_000));
+      queuePoll = window.setTimeout(loadQueue, nextCheck);
     }
   } catch (_) { /* Queue will refresh next time. */ }
 }

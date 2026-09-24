@@ -33,4 +33,50 @@
   font-size: .76rem;
 }
 
+.how-to {
+  margin: 0 0 28px;
+  padding: 22px;
+  border: 1px solid var(--line);
+  border-radius: 19px;
+  background: var(--surface);
+}
+
+.how-to h2 { margin: 3px 0 12px; }
+
+.how-to ol { margin: 0; padding-left: 22px; color: var(--muted); }
+
+.how-to li + li { margin-top: 8px; }
+
+.how-to strong { color: var(--ink); }
+
+.how-to p { margin: 14px 0 0; color: var(--muted); font-size: .85rem; }
+
+.progress-text {
+  display: block;
+  margin-top: 7px;
+  color: var(--muted);
+  font-size: .76rem;
+}
+
+.ready-download { margin-top: 12px; }
+
+.ready-download > span {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--mint);
+  font-size: .76rem;
+  font-weight: 800;
+}
+
+.download {
+  display: inline-block;
+  padding: 10px 13px;
+  border-radius: 9px;
+  background: var(--mint);
+  color: #061512;
+  font-size: .85rem;
+  font-weight: 800;
+  text-decoration: none;
+}
+
 .pill.served { color: var(--muted); }
