@@ -9,13 +9,14 @@ import os
 import socket
 import time
 import uuid
+from collections import deque
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlparse
 
 import yt_dlp
-from fastapi import FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -24,6 +25,8 @@ DATA_DIR = Path(os.getenv("DOWNLOAD_DIR", "/data/downloads")).resolve()
 MAX_BATCH = int(os.getenv("MAX_BATCH", "8"))
 MAX_CONCURRENT = int(os.getenv("MAX_CONCURRENT_DOWNLOADS", "2"))
 DOWNLOAD_TTL_SECONDS = int(os.getenv("DOWNLOAD_TTL_SECONDS", "86400"))
+MAX_DOWNLOADS_PER_HOUR = int(os.getenv("MAX_DOWNLOADS_PER_HOUR", "5"))
+RATE_LIMIT_WINDOW_SECONDS = 3_600
 
 
 class AnalyzeRequest(BaseModel):
@@ -43,7 +46,7 @@ class QueueRequest(BaseModel):
 class Job(BaseModel):
     id: str
     source_url: str
-    state: Literal["queued", "downloading", "complete", "failed"] = "queued"
+    state: Literal["queued", "downloading", "complete", "served", "failed"] = "queued"
     quality: str = "best"
     format_id: str | None = Field(default=None, exclude=True)
     progress: int = 0
@@ -57,6 +60,8 @@ class Job(BaseModel):
 jobs: dict[str, Job] = {}
 work_queue: asyncio.Queue[str] = asyncio.Queue()
 workers: list[asyncio.Task[None]] = []
+download_windows: dict[str, deque[float]] = {}
+download_window_lock = asyncio.Lock()
 
 
 def validate_public_url(value: str) -> str:
@@ -75,6 +80,33 @@ def validate_public_url(value: str) -> str:
         if not ip.is_global:
             raise HTTPException(422, "Internal or private network addresses are not allowed.")
     return parsed.geturl()
+
+
+def client_address(request: Request) -> str:
+    """Use Cloudflare's visitor IP when LinkDrop is behind the tunnel."""
+    return (
+        request.headers.get("cf-connecting-ip")
+        or request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+        or (request.client.host if request.client else "unknown")
+    )
+
+
+async def reserve_downloads(request: Request, amount: int) -> None:
+    """Reserve a user's hourly allowance before work enters the queue."""
+    now = time.time()
+    visitor = client_address(request)
+    async with download_window_lock:
+        window = download_windows.setdefault(visitor, deque())
+        cutoff = now - RATE_LIMIT_WINDOW_SECONDS
+        while window and window[0] <= cutoff:
+            window.popleft()
+        if len(window) + amount > MAX_DOWNLOADS_PER_HOUR:
+            remaining = max(0, MAX_DOWNLOADS_PER_HOUR - len(window))
+            raise HTTPException(
+                429,
+                f"Hourly limit reached. You can start {remaining} more download(s) this hour.",
+            )
+        window.extend(now for _ in range(amount))
 
 
 def public_metadata(url: str) -> dict:
@@ -174,6 +206,13 @@ async def remove_expired_jobs() -> None:
                     file.unlink(missing_ok=True)
                 directory.rmdir()
                 jobs.pop(job_id, None)
+        async with download_window_lock:
+            rate_cutoff = time.time() - RATE_LIMIT_WINDOW_SECONDS
+            for visitor, window in list(download_windows.items()):
+                while window and window[0] <= rate_cutoff:
+                    window.popleft()
+                if not window:
+                    download_windows.pop(visitor, None)
 
 
 @asynccontextmanager
@@ -199,10 +238,16 @@ async def analyze(request: AnalyzeRequest):
 
 
 @app.post("/api/jobs", status_code=202)
-async def create_jobs(request: QueueRequest):
+async def create_jobs(payload: QueueRequest, request: Request):
+    # Validate everything before deducting an allowance, so rejected links do
+    # not count against a visitor's five downloads.
+    validated_items = [
+        (validate_public_url(item.url), item) for item in payload.items
+    ]
+    await reserve_downloads(request, len(payload.items))
     created: list[Job] = []
-    for item in request.items:
-        job = Job(id=uuid.uuid4().hex, source_url=validate_public_url(item.url), quality=item.quality)
+    for source_url, item in validated_items:
+        job = Job(id=uuid.uuid4().hex, source_url=source_url, quality=item.quality)
         job.format_id = item.format_id
         jobs[job.id] = job
         await work_queue.put(job.id)
@@ -215,8 +260,17 @@ async def list_jobs():
     return {"jobs": sorted(jobs.values(), key=lambda job: job.created_at, reverse=True)}
 
 
+def remove_served_file(job_id: str, file: Path) -> None:
+    """Remove a one-time file after its response finishes streaming."""
+    file.unlink(missing_ok=True)
+    job = jobs.get(job_id)
+    if job:
+        job.filename = None
+        job.state = "served"
+
+
 @app.get("/api/files/{job_id}")
-async def get_file(job_id: str):
+async def get_file(job_id: str, background_tasks: BackgroundTasks):
     job = jobs.get(job_id)
     if not job or job.state != "complete" or not job.filename:
         raise HTTPException(404, "This file is not available.")
@@ -224,6 +278,7 @@ async def get_file(job_id: str):
     if not file.is_file():
         raise HTTPException(404, "This file is no longer available.")
     media_type, _ = mimetypes.guess_type(file.name)
+    background_tasks.add_task(remove_served_file, job_id, file)
     return FileResponse(
         file,
         filename=job.filename,
@@ -232,6 +287,7 @@ async def get_file(job_id: str):
             "Cache-Control": "private, no-store, max-age=0",
             "X-Content-Type-Options": "nosniff",
         },
+        background=background_tasks,
     )
 
 
