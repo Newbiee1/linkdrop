@@ -39,7 +39,7 @@ Protect `/linkdrop/` with your existing authentication layer before use. The ser
 | --- | --- | --- |
 | `MAX_CONCURRENT_DOWNLOADS` | `2` | Number of active jobs. |
 | `MAX_BATCH` | `8` | Maximum URLs accepted in one request. |
-| `DOWNLOAD_TTL_SECONDS` | `300` | How long completed files remain available (five minutes). |
+| `FILE_AVAILABILITY_SECONDS` | `300` | How long completed files remain available (five minutes). |
 | `DOWNLOAD_DIR` | `/data/downloads` | Persistent download storage. |
 
 ## Project approach

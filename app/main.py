@@ -6,6 +6,8 @@ import asyncio
 import ipaddress
 import mimetypes
 import os
+import secrets
+import shutil
 import socket
 import time
 import uuid
@@ -16,7 +18,7 @@ from typing import Literal
 from urllib.parse import urlparse
 
 import yt_dlp
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -24,8 +26,11 @@ from pydantic import BaseModel, Field
 DATA_DIR = Path(os.getenv("DOWNLOAD_DIR", "/data/downloads")).resolve()
 MAX_BATCH = int(os.getenv("MAX_BATCH", "8"))
 MAX_CONCURRENT = int(os.getenv("MAX_CONCURRENT_DOWNLOADS", "2"))
-DOWNLOAD_TTL_SECONDS = int(os.getenv("DOWNLOAD_TTL_SECONDS", "300"))
-CLEANUP_INTERVAL_SECONDS = min(60, max(5, DOWNLOAD_TTL_SECONDS // 10))
+# This deliberately uses a new setting name. The production service still has
+# an older DOWNLOAD_TTL_SECONDS=86400 value, which must not keep user files for
+# a day after the five-minute policy was introduced.
+FILE_AVAILABILITY_SECONDS = int(os.getenv("FILE_AVAILABILITY_SECONDS", "300"))
+CLEANUP_INTERVAL_SECONDS = min(60, max(5, FILE_AVAILABILITY_SECONDS // 10))
 MAX_DOWNLOADS_PER_HOUR = int(os.getenv("MAX_DOWNLOADS_PER_HOUR", "5"))
 RATE_LIMIT_WINDOW_SECONDS = 3_600
 
@@ -49,6 +54,7 @@ class QueueRequest(BaseModel):
 class Job(BaseModel):
     id: str
     source_url: str
+    owner_id: str = Field(exclude=True)
     state: Literal["queued", "downloading", "complete", "failed"] = "queued"
     quality: str = "best"
     format_id: str | None = Field(default=None, exclude=True)
@@ -93,6 +99,21 @@ def client_address(request: Request) -> str:
         or request.headers.get("x-forwarded-for", "").split(",")[0].strip()
         or (request.client.host if request.client else "unknown")
     )
+
+
+def visitor_session(request: Request) -> str:
+    """Return the opaque cookie used to keep each browser's jobs private."""
+    session = request.cookies.get("linkdrop_session")
+    if not session:
+        raise HTTPException(401, "Start a private session before creating a download.")
+    return session
+
+
+def remove_job_directory(job_id: str) -> None:
+    """Delete files only from LinkDrop's own per-job directory."""
+    directory = DATA_DIR / job_id
+    if directory.is_dir():
+        shutil.rmtree(directory, ignore_errors=True)
 
 
 async def reserve_downloads(request: Request, amount: int) -> None:
@@ -186,10 +207,11 @@ def run_download(job_id: str) -> None:
         job.progress = 100
         job.state = "complete"
         job.completed_at = time.time()
-        job.expires_at = job.completed_at + DOWNLOAD_TTL_SECONDS
+        job.expires_at = job.completed_at + FILE_AVAILABILITY_SECONDS
     except Exception as exc:  # yt-dlp errors are made safe for the UI here.
         job.state = "failed"
         job.error = str(exc)[:300]
+        remove_job_directory(job_id)
 
 
 async def download_worker() -> None:
@@ -204,13 +226,10 @@ async def download_worker() -> None:
 async def remove_expired_jobs() -> None:
     while True:
         await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
-        cutoff = time.time() - DOWNLOAD_TTL_SECONDS
+        cutoff = time.time() - FILE_AVAILABILITY_SECONDS
         for job_id, job in list(jobs.items()):
             if job.completed_at and job.completed_at < cutoff:
-                directory = DATA_DIR / job_id
-                for file in directory.glob("*"):
-                    file.unlink(missing_ok=True)
-                directory.rmdir()
+                remove_job_directory(job_id)
                 jobs.pop(job_id, None)
         async with download_window_lock:
             rate_cutoff = time.time() - RATE_LIMIT_WINDOW_SECONDS
@@ -224,6 +243,13 @@ async def remove_expired_jobs() -> None:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+    # Jobs are intentionally memory-only. On a restart, remove stale orphaned
+    # files from the dedicated volume so they never outlive the five-minute
+    # policy simply because the app was redeployed.
+    cutoff = time.time() - FILE_AVAILABILITY_SECONDS
+    for directory in DATA_DIR.iterdir():
+        if directory.is_dir() and directory.stat().st_mtime < cutoff:
+            shutil.rmtree(directory, ignore_errors=True)
     workers.extend(asyncio.create_task(download_worker()) for _ in range(MAX_CONCURRENT))
     workers.append(asyncio.create_task(remove_expired_jobs()))
     yield
@@ -232,6 +258,21 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="LinkDrop", lifespan=lifespan)
+
+
+@app.get("/api/session")
+async def ensure_private_session(request: Request, response: Response):
+    """Issue an opaque, HttpOnly session cookie if this browser lacks one."""
+    if not request.cookies.get("linkdrop_session"):
+        response.set_cookie(
+            key="linkdrop_session",
+            value=secrets.token_urlsafe(32),
+            httponly=True,
+            secure=True,
+            samesite="lax",
+            max_age=60 * 60 * 24 * 30,
+        )
+    return {"ok": True}
 
 
 @app.post("/api/analyze")
@@ -250,10 +291,11 @@ async def create_jobs(payload: QueueRequest, request: Request):
     validated_items = [
         (validate_public_url(item.url), item) for item in payload.items
     ]
+    owner_id = visitor_session(request)
     await reserve_downloads(request, len(payload.items))
     created: list[Job] = []
     for source_url, item in validated_items:
-        job = Job(id=uuid.uuid4().hex, source_url=source_url, quality=item.quality)
+        job = Job(id=uuid.uuid4().hex, source_url=source_url, owner_id=owner_id, quality=item.quality)
         job.format_id = item.format_id
         jobs[job.id] = job
         await work_queue.put(job.id)
@@ -262,14 +304,16 @@ async def create_jobs(payload: QueueRequest, request: Request):
 
 
 @app.get("/api/jobs")
-async def list_jobs():
-    return {"jobs": sorted(jobs.values(), key=lambda job: job.created_at, reverse=True)}
+async def list_jobs(request: Request):
+    owner_id = visitor_session(request)
+    own_jobs = (job for job in jobs.values() if job.owner_id == owner_id)
+    return {"jobs": sorted(own_jobs, key=lambda job: job.created_at, reverse=True)}
 
 
 @app.get("/api/files/{job_id}")
-async def get_file(job_id: str):
+async def get_file(job_id: str, request: Request):
     job = jobs.get(job_id)
-    if not job or job.state != "complete" or not job.filename:
+    if not job or job.owner_id != visitor_session(request) or job.state != "complete" or not job.filename:
         raise HTTPException(404, "This file is not available.")
     file = DATA_DIR / job_id / job.filename
     if not file.is_file():

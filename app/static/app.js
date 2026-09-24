@@ -4,6 +4,10 @@ const choices = document.querySelector('#choices');
 const queue = document.querySelector('#queue');
 let analyzed = [];
 let queuePoll;
+const sessionReady = fetch('/api/session', { credentials: 'same-origin' })
+  .then(response => {
+    if (!response.ok) throw new Error('Could not start a private browser session.');
+  });
 
 function urls() { return [...new Set(links.value.split(/\n|,|\s+/).map(x => x.trim()).filter(Boolean))]; }
 function updateCount() { count.textContent = `${urls().length} of 8 links`; }
@@ -21,6 +25,7 @@ function availableQualities(video) {
 }
 
 async function api(path, options = {}) {
+  await sessionReady;
   const response = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...options });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(body.detail || 'Something went wrong.');

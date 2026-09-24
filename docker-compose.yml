@@ -10,7 +10,7 @@ services:
     environment:
       MAX_CONCURRENT_DOWNLOADS: "2"
       MAX_BATCH: "8"
-      DOWNLOAD_TTL_SECONDS: "300"
+      FILE_AVAILABILITY_SECONDS: "300"
 
 volumes:
   linkdrop-downloads:
