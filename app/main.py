@@ -36,7 +36,9 @@ class AnalyzeRequest(BaseModel):
 class QueueItem(BaseModel):
     url: str = Field(max_length=2_048)
     format_id: str | None = Field(default=None, max_length=80)
-    quality: Literal["best", "1080", "720", "480", "360"] = "best"
+    # A numeric height comes only from the source metadata returned to the UI.
+    # Keeping it numeric prevents it from changing yt-dlp's format expression.
+    quality: str = Field(default="best", pattern=r"^(best|[1-9]\d{1,4})$")
 
 
 class QueueRequest(BaseModel):
@@ -113,24 +115,23 @@ def public_metadata(url: str) -> dict:
     options = {"quiet": True, "no_warnings": True, "noplaylist": True, "skip_download": True}
     with yt_dlp.YoutubeDL(options) as client:
         info = client.extract_info(url, download=False)
-    formats: list[dict] = []
-    seen: set[str] = set()
+    formats_by_height: dict[int, dict] = {}
     for item in info.get("formats", []):
         height = item.get("height")
         format_id = item.get("format_id")
-        if not height or not format_id or format_id in seen:
+        if not height or not format_id:
             continue
-        seen.add(format_id)
-        formats.append(
-            {
-                "id": str(format_id),
-                "label": f"{height}p" + (" (MP4)" if item.get("ext") == "mp4" else ""),
-                "height": height,
-                "ext": item.get("ext"),
-                "filesize": item.get("filesize") or item.get("filesize_approx"),
-            }
-        )
-    formats.sort(key=lambda item: item["height"], reverse=True)
+        candidate = {
+            "id": str(format_id),
+            "label": f"{height}p" + (" (MP4)" if item.get("ext") == "mp4" else ""),
+            "height": height,
+            "ext": item.get("ext"),
+            "filesize": item.get("filesize") or item.get("filesize_approx"),
+        }
+        existing = formats_by_height.get(height)
+        if not existing or (candidate["ext"] == "mp4" and existing["ext"] != "mp4"):
+            formats_by_height[height] = candidate
+    formats = sorted(formats_by_height.values(), key=lambda item: item["height"], reverse=True)
     return {
         "title": info.get("title") or "Untitled video",
         "thumbnail": info.get("thumbnail"),

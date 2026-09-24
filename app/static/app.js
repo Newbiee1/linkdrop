@@ -9,6 +9,17 @@ function urls() { return [...new Set(links.value.split(/\n|,|\s+/).map(x => x.tr
 function updateCount() { count.textContent = `${urls().length} of 8 links`; }
 links.addEventListener('input', updateCount);
 
+function availableQualities(video) {
+  const byHeight = new Map();
+  for (const format of video.formats || []) {
+    const height = Number(format.height);
+    if (!Number.isInteger(height) || height < 1) continue;
+    const current = byHeight.get(height);
+    if (!current || (format.ext === 'mp4' && current.ext !== 'mp4')) byHeight.set(height, format);
+  }
+  return [...byHeight.values()].sort((left, right) => right.height - left.height);
+}
+
 async function api(path, options = {}) {
   const response = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...options });
   const body = await response.json().catch(() => ({}));
@@ -24,7 +35,14 @@ document.querySelector('#analyze').addEventListener('click', async () => {
   choices.innerHTML = '<p>Checking available versions…</p>';
   try {
     analyzed = await Promise.all(entries.map(async url => ({ url, ...(await api('/api/analyze', { method: 'POST', body: JSON.stringify({ url }) })) })));
-    choices.innerHTML = analyzed.map((video, index) => `<article data-index="${index}"><h3>${escapeHtml(video.title)}</h3><p>${escapeHtml(video.url)}</p><div class="choice-row"><button class="quality selected" data-quality="best">Best available</button>${[1080,720,480,360].map(q => `<button class="quality" data-quality="${q}">${q}p</button>`).join('')}</div></article>`).join('') + '<button class="panel-action" type="button">Add to download queue</button>';
+    choices.innerHTML = analyzed.map((video, index) => {
+      const versions = availableQualities(video);
+      const buttons = versions.map(format => `<button class="quality" data-quality="${format.height}">${format.height}p${format.ext === 'mp4' ? ' · MP4' : ''}</button>`).join('');
+      const availability = versions.length
+        ? `Available from this source: ${versions.map(format => `${format.height}p`).join(' · ')}`
+        : 'This source did not report separate versions. Best available is the only option.';
+      return `<article data-index="${index}"><h3>${escapeHtml(video.title)}</h3><p>${escapeHtml(video.url)}</p><small class="available-versions">${availability}</small><div class="choice-row"><button class="quality selected" data-quality="best">Best available</button>${buttons}</div></article>`;
+    }).join('') + '<button class="panel-action" type="button">Add to download queue</button>';
   } catch (error) { choices.innerHTML = `<p>${escapeHtml(error.message)}</p>`; }
 });
 
