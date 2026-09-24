@@ -1,0 +1,29 @@
+.ad-slot {
+  min-height: 100px;
+  margin: 22px 0 0;
+  padding: 10px 12px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #0d1727;
+}
+
+.ad-slot > span {
+  display: block;
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-size: .65rem;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.save-help {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: .76rem;
+}
+
+.pill.served { color: var(--muted); }

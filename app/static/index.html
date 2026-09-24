@@ -7,6 +7,8 @@
     <title>LinkDrop — save your permitted videos</title>
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='17' fill='%235eead4'/%3E%3Cpath d='M32 12v27m0 0-11-11m11 11 11-11M17 43v8h30v-8' fill='none' stroke='%230b1120' stroke-width='6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
     <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/ads.css" />
+    <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-2237085595588739" crossorigin="anonymous"></script>
     <script defer src="/app.js"></script>
   </head>
   <body>
@@ -27,6 +29,16 @@
             <button id="analyze" type="button">Find versions <b>→</b></button>
           </div>
         </div>
+        <section class="ad-slot" aria-label="Advertisement">
+          <span>Advertisement</span>
+          <ins class="adsbygoogle"
+               style="display:block"
+               data-ad-client="ca-pub-2237085595588739"
+               data-ad-slot="3968999004"
+               data-ad-format="auto"
+               data-full-width-responsive="true"></ins>
+          <script>(adsbygoogle = window.adsbygoogle || []).push({});</script>
+        </section>
         <p class="notice">Only download media you own or are authorized to save. This service does not bypass DRM or access controls.</p>
       </section>
       <section id="choices" class="panel hidden" aria-live="polite"></section>
@@ -35,6 +47,6 @@
         <div id="queue" class="queue empty">Nothing in the queue yet.</div>
       </section>
     </main>
-    <footer>LinkDrop runs on your own server. Files are deleted automatically after 24 hours.</footer>
+    <footer>LinkDrop runs on your own server. Downloaded files are removed after delivery or automatically after 24 hours.</footer>
   </body>
 </html>
