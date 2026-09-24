@@ -102,10 +102,10 @@ def client_address(request: Request) -> str:
 
 
 def visitor_session(request: Request) -> str:
-    """Return the opaque cookie used to keep each browser's jobs private."""
-    session = request.cookies.get("linkdrop_session")
-    if not session:
-        raise HTTPException(401, "Start a private session before creating a download.")
+    """Return the opaque browser token used to keep download queues private."""
+    session = request.headers.get("x-linkdrop-session") or request.cookies.get("linkdrop_session")
+    if not session or len(session) > 100:
+        raise HTTPException(401, "Could not start this browser's download session.")
     return session
 
 
@@ -262,17 +262,21 @@ app = FastAPI(title="LinkDrop", lifespan=lifespan)
 
 @app.get("/api/session")
 async def ensure_private_session(request: Request, response: Response):
-    """Issue an opaque, HttpOnly session cookie if this browser lacks one."""
-    if not request.cookies.get("linkdrop_session"):
+    """Return a browser token; the page attaches it automatically to API calls."""
+    session = request.headers.get("x-linkdrop-session") or request.cookies.get("linkdrop_session")
+    if not session:
+        session = secrets.token_urlsafe(32)
+    if request.cookies.get("linkdrop_session") != session:
         response.set_cookie(
             key="linkdrop_session",
-            value=secrets.token_urlsafe(32),
+            value=session,
             httponly=True,
             secure=True,
             samesite="lax",
             max_age=60 * 60 * 24 * 30,
         )
-    return {"ok": True}
+    response.headers["Cache-Control"] = "no-store"
+    return {"session": session}
 
 
 @app.post("/api/analyze")

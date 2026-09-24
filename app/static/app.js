@@ -4,9 +4,19 @@ const choices = document.querySelector('#choices');
 const queue = document.querySelector('#queue');
 let analyzed = [];
 let queuePoll;
-const sessionReady = fetch('/api/session', { credentials: 'same-origin' })
-  .then(response => {
-    if (!response.ok) throw new Error('Could not start a private browser session.');
+let browserSession = '';
+let storedSession = '';
+try { storedSession = localStorage.getItem('linkdrop_session') || ''; } catch (_) { /* Cookie fallback. */ }
+const sessionReady = fetch('/api/session', {
+  credentials: 'same-origin',
+  cache: 'no-store',
+  headers: storedSession ? { 'X-LinkDrop-Session': storedSession } : {},
+})
+  .then(async response => {
+    if (!response.ok) throw new Error('Could not connect to LinkDrop.');
+    const body = await response.json();
+    browserSession = body.session;
+    try { localStorage.setItem('linkdrop_session', browserSession); } catch (_) { /* Cookie still works. */ }
   });
 
 function urls() { return [...new Set(links.value.split(/\n|,|\s+/).map(x => x.trim()).filter(Boolean))]; }
@@ -26,7 +36,10 @@ function availableQualities(video) {
 
 async function api(path, options = {}) {
   await sessionReady;
-  const response = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...options });
+  const response = await fetch(path, {
+    ...options,
+    headers: { 'Content-Type': 'application/json', 'X-LinkDrop-Session': browserSession, ...options.headers },
+  });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(body.detail || 'Something went wrong.');
   return body;
