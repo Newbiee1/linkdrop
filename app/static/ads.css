@@ -19,6 +19,11 @@
   text-transform: uppercase;
 }
 
+.download-ad {
+  min-height: 130px;
+  margin: 30px 0;
+}
+
 .save-help {
   display: block;
   margin-top: 6px;

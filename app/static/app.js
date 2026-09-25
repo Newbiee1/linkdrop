@@ -2,6 +2,7 @@ const links = document.querySelector('#links');
 const count = document.querySelector('#count');
 const choices = document.querySelector('#choices');
 const queue = document.querySelector('#queue');
+const downloadAd = document.querySelector('#download-ad');
 let analyzed = [];
 let queuePoll;
 let browserSession = '';
@@ -78,14 +79,29 @@ function minutesRemaining(job) {
   if (!job.expires_at) return 'a few minutes';
   return `${Math.max(1, Math.ceil((job.expires_at - Date.now() / 1000) / 60))} min`;
 }
+
+function updateDownloadAd(waiting) {
+  if (!waiting) {
+    downloadAd.classList.add('hidden');
+    return;
+  }
+  downloadAd.classList.remove('hidden');
+  if (downloadAd.dataset.loaded) return;
+  try {
+    (window.adsbygoogle = window.adsbygoogle || []).push({});
+    downloadAd.dataset.loaded = 'true';
+  } catch (_) { /* An ad blocker or unavailable inventory must not affect downloads. */ }
+}
+
 async function loadQueue() {
   try {
     const data = await api('/api/jobs');
     window.clearTimeout(queuePoll);
-    if (!data.jobs.length) { queue.className = 'queue empty'; queue.textContent = 'Nothing in the queue yet.'; return; }
+    if (!data.jobs.length) { updateDownloadAd(false); queue.className = 'queue empty'; queue.textContent = 'Nothing in the queue yet.'; return; }
     queue.className = 'queue';
     queue.innerHTML = data.jobs.map(job => `<article class="job"><div class="job-head"><span class="job-title">${escapeHtml(label(job))}</span><span class="pill ${job.state}">${job.state === 'downloading' ? `downloading ${job.progress}%` : job.state}</span></div>${job.state === 'downloading' ? `<div class="bar"><i style="width:${job.progress}%"></i></div><small class="progress-text">Server download: ${job.progress}%</small>` : ''}${job.state === 'complete' ? `<div class="ready-download"><span>↓ Tap here to save your video</span><a class="download" href="/api/files/${job.id}" download>Download to device ↓</a></div><small class="save-help">Ready now — available for about ${minutesRemaining(job)}. On iPhone, tap the button once, then open Safari’s Downloads (↓) and choose Save to Files.</small>` : ''}${job.state === 'failed' ? `<small>${escapeHtml(job.error || 'Download failed')}</small>` : ''}</article>`).join('');
     const waiting = data.jobs.some(job => job.state === 'queued' || job.state === 'downloading');
+    updateDownloadAd(waiting);
     const expiry = Math.min(...data.jobs.filter(job => job.state === 'complete' && job.expires_at).map(job => job.expires_at));
     if (waiting) {
       queuePoll = window.setTimeout(loadQueue, 2_000);
